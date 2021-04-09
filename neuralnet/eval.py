@@ -41,7 +41,10 @@ def main(_):
   if FLAGS.backend.lower() in ('tensorflow', 'tf'):
     from neuralnet.tensorflow.eval import Evaluator
   elif FLAGS.backend.lower() in ('pytorch', 'py', 'torch'):
-    from neuralnet.pytorch.eval import Evaluator
+    if config_name == 'eval' or 'attack' in config_name:
+      from neuralnet.pytorch.eval import Evaluator
+    elif config_name == 'eval_with_noise':
+      from neuralnet.pytorch.eval_with_noise import Evaluator
   else:
     raise ValueError(
       "Backend not recognised. Choose between Tensorflow and Pytorch.")

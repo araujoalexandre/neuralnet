@@ -18,6 +18,7 @@ from .dataset.readers import readers_config
 
 import numpy as np
 import torch
+import torchvision.transforms.functional as F
 import torch.backends.cudnn as cudnn
 
 
@@ -97,6 +98,16 @@ class Evaluator:
                       attack_params)
 
 
+    # add normalization as first layer of model
+    if getattr(self.reader, 'normalize_mean', False):
+      original_forward = self.model.forward
+      def new_forward(inputs):
+        inputs = F.normalize(
+          inputs, self.reader.normalize_mean, self.reader.normalize_std)
+        return original_forward(inputs)
+      self.model.forward = new_forward
+
+
   def run(self):
     """Run evaluation of model or eval under attack"""
     logging.info("Building evaluation graph")
@@ -110,13 +121,23 @@ class Evaluator:
 
   def load_ckpt(self, path):
     checkpoint = torch.load(path)
-    global_step = checkpoint['global_step']
-    epoch = checkpoint['epoch']
+    global_step = checkpoint.get('global_step', 250)
+    epoch = checkpoint.get('epoch', 1)
     if 'ema' in checkpoint.keys():
       logging.info("Loading ema state dict.")
       self.model.load_state_dict(checkpoint['ema'])
     else:
-      self.model.load_state_dict(checkpoint['model_state_dict'])
+      if 'model_state_dict' not in checkpoint.keys():
+        # if model_state_dict is not in checkpoint.keys() the 
+        # checkpoint must be a pre-trained model
+        # we should fix the problem of 'module'
+        new_state_dict = {}
+        for k, v in checkpoint.items():
+          new_name = 'module.' + k
+          new_state_dict[new_name] = v
+        self.model.load_state_dict(new_state_dict)
+      else:
+        self.model.load_state_dict(checkpoint['model_state_dict'])
     self.model.eval()
     return global_step, epoch
 
@@ -179,7 +200,12 @@ class Evaluator:
         inputs, labels = inputs.cuda(), labels.cuda()
         if self.add_noise:
           inputs = self.noise(inputs)
+
+        assert np.allclose(float(inputs.min().detach().cpu()), 0)
+        assert np.allclose(float(inputs.max().detach().cpu()), 1)
+
         outputs = self.model(inputs)
+
         loss = self.criterion(outputs, labels)
         _, predicted = torch.max(outputs.data, 1)
         seconds_per_batch = time.time() - batch_start_time
@@ -223,9 +249,15 @@ class Evaluator:
       inputs, labels = inputs.cuda(), labels.cuda()
       if self.add_noise:
         inputs = self.noise(inputs)
-      outputs = self.model(inputs)
 
+      assert np.allclose(float(inputs.min().detach().cpu()), 0)
+      assert np.allclose(float(inputs.max().detach().cpu()), 1)
+
+      # craft attack
       inputs_adv = self.attack.perturb(inputs, labels)
+
+      # predict
+      outputs = self.model(inputs)
       outputs_adv = self.model(inputs_adv)
 
       loss = self.criterion(outputs_adv, labels)

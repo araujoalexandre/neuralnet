@@ -187,7 +187,6 @@ class EfficientNetRandomCrop:
       self._fallback = EfficientNetCenterCrop(imgsize)
 
     def __call__(self, img):
-      # https://github.com/tensorflow/tensorflow/blob/9274bcebb31322370139467039034f8ff852b004/tensorflow/core/kernels/sample_distorted_bounding_box_op.cc#L111
       original_width, original_height = img.size
       min_area = self.area_range[0] * (original_width * original_height)
       max_area = self.area_range[1] * (original_width * original_height)
@@ -289,6 +288,14 @@ class IMAGENETReader(BaseReader):
       ]
     }
 
+    self.normalize_mean = [0.485, 0.456, 0.406]
+    self.normalize_std = [0.229, 0.224, 0.225]
+
+    self.imagenet_normalize = transforms.Normalize(
+      mean=self.normalize_mean,
+      std=self.normalize_std
+    )
+
     self.height, self.width = self.image_size, self.image_size
     self.n_train_files = 1281167
     self.n_test_files = 50000
@@ -318,9 +325,8 @@ class IMAGENETReader(BaseReader):
         transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
         transforms.ToTensor(),
         Lighting(0.1, self.imagenet_pca['eigval'], self.imagenet_pca['eigvec']),
-        transforms.Normalize(
-          mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        final_normalization
+        # self.imagenet_normalize,
+        # final_normalization
       ])
     else:
       transform = Compose([
@@ -328,25 +334,26 @@ class IMAGENETReader(BaseReader):
         transforms.Resize(
           (self.image_size, self.image_size), interpolation=Image.BICUBIC),
         transforms.ToTensor(),
-        transforms.Normalize(
-          mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        final_normalization
+        # self.imagenet_normalize,
+        # final_normalization
       ])
     return transform
 
   def transform(self):
     if self.is_training:
       transform = Compose([
-        transforms.Resize(self.image_size),
-        transforms.CenterCrop(self.image_size),
         transforms.RandomResizedCrop(self.image_size),
         transforms.RandomHorizontalFlip(),
-        transforms.ToTensor()])
+        transforms.ToTensor(),
+        # self.imagenet_normalize,
+      ])
     else:
       transform = Compose([
-       transforms.Resize(self.image_size),
-       transforms.CenterCrop(self.image_size),
-       transforms.ToTensor()])
+        transforms.Resize(self.image_size+32),
+        transforms.CenterCrop(self.image_size),
+        transforms.ToTensor(),
+        # self.imagenet_normalize,
+      ])
     return transform
 
 

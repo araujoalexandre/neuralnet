@@ -85,8 +85,10 @@ class GenerateRunJobConfig:
     # define the name of the log file
     if self.mode == 'train':
       self.log_filename = 'train'
-    elif self.mode in 'eval':
+    elif self.mode == 'eval':
       self.log_filename = 'eval'
+    elif self.mode == 'eval_with_noise': 
+      self.log_filename = 'eval_with_noise'
     elif self.mode == 'attack':
       self.log_filename = 'attack_{}'.format(self.attack_name)
 
@@ -131,7 +133,7 @@ class GenerateRunJobConfig:
     if not self.file_to_run:
       if self.mode == "train":
         self.file_to_run = "train.py"
-      elif self.mode in ['eval', 'attack']:
+      elif self.mode in ['eval', 'eval_with_noise', 'attack']:
         self.file_to_run = "eval.py"
 
     if self.mode == 'train' and self.start_new_model:
@@ -141,7 +143,7 @@ class GenerateRunJobConfig:
       if not exists(join(self.logs_dir, 'neuralnet')):
         copy_tree(src_folder, join(self.logs_dir, 'neuralnet'))
 
-    elif self.mode in ('eval', 'attack') or \
+    elif self.mode in ('eval', 'attack', 'eval_with_noise') or \
           (self.mode == 'train' and not self.start_new_model):
       self.config_path = join(self.logs_dir, 'config.yaml')
       assert exists(self.config_path), \
@@ -247,7 +249,7 @@ class GenerateRunJobConfig:
   def run(self):
     if self.mode == "train":
       return self.run_training_mode()
-    elif self.mode in ('eval', 'attack'):
+    elif self.mode in ('eval', 'attack', 'eval_with_noise'):
       return self.run_eval_attack_mode()
 
 
@@ -317,7 +319,7 @@ if __name__ == '__main__':
   parser.add_argument("--train_dir", type=str,
                         help="Name or path of train directory.")
   parser.add_argument("--mode", type=str, default="train",
-                        choices=("train", "eval", "attack"),
+                        choices=("train", "eval", "attack", "eval_with_noise"),
                         help="Choose job type train, eval, attack.")
   parser.add_argument("--backend", type=str, default="pytorch",
                         choices=("tensorflow", "tf", "pytorch", "torch", "py"),
@@ -402,11 +404,11 @@ if __name__ == '__main__':
   if args.mode == 'train' and args.config is None and args.train_dir is None:
     raise ValueError(
       "Train mode needs the name of a config file or a train_dir.")
-  if not args.mode in ("train", "eval", "attack"):
+  if not args.mode in ("train", "eval", "attack", "eval_with_noise"):
     raise ValueError(
-      "mode not recognized, should be ('train', 'eval', 'attack')")
+      "mode not recognized, should be ('train', 'eval', 'attack', 'eval_with_noise')")
 
-  if args.mode == 'eval':
+  if args.mode in ['eval', 'eval_with_noise']:
     assert args.train_dir, \
         "Need to specify the name of the model to evaluate: --folder."
   elif args.mode == 'attack':

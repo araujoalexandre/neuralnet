@@ -177,13 +177,15 @@ class GenerateScript:
       args.append('--config_name=train')
     if self.mode == 'eval':
       args.append('--config_name=eval')
+    elif self.mode == 'eval_with_noise':
+      args.append('--config_name=eval_with_noise')
     elif self.mode == 'attack':
       args.append('--config_name=attack_{}'.format(self.attack_name))
     args.append('--train_dir={}'.format(self.train_dir))
     args.append('--data_dir={}'.format(self.data_dir))
     args.append('--backend={}'.format(self.backend))
     args.append('--n_gpus={}'.format(self.n_gpus))
-    if self.override_params and self.mode in ('eval', 'attack'):
+    if self.override_params and self.mode in ('eval', 'attack', 'eval_with_noise'):
       args.append("--override_params='{}'".format(self.override_params))
     if self.distributed:
       args.append('--job_name={}'.format(job_name))

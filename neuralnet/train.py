@@ -1,66 +1,63 @@
 
-import json
-from absl import app, flags
-
+import argparse
 import utils
+from core.trainer import Trainer
 
-FLAGS = flags.FLAGS
+def main(args):
 
-flags.DEFINE_string("config_file", "params.yaml",
-                    "Name of the yaml config file.")
-flags.DEFINE_string("config_name", "train",
-                    "Define the execution mode.")
-flags.DEFINE_string("train_dir", "",
-                    "Name of the training directory")
-flags.DEFINE_string("data_dir", "",
-                    "Name of the data directory")
-flags.DEFINE_bool("start_new_model", True,
-                  "Start training a new model or restart an existing one.")
-flags.DEFINE_enum("job_name", "", ("ps", "worker", "controller", ""),
-                  "Type of job 'ps', 'worker', 'controller', ''.")
-flags.DEFINE_integer("n_gpus", 4, "Number of GPUs to use.")
-flags.DEFINE_integer("local_rank", 0, "Define local rank.")
-flags.DEFINE_string("ps_hosts", "", "Comma-separated list of target hosts.")
-flags.DEFINE_string("worker_hosts", "", "Comma-separated list of target hosts.")
-flags.DEFINE_string("controller_host", None, "optional controller host.")
-flags.DEFINE_string("master_host", "", "ip/hostname of the master.")
-flags.DEFINE_string("master_port", "", "port of the master.")
-flags.DEFINE_integer("task_index", 0, "Index of task within the job")
-flags.DEFINE_string("backend", "tensorflow",
-                    "Whether run tensorflow model of Pytorch.")
+  # the function load_params will load the yaml config file and 
+  # override parameters if necessary
+  params = utils.load_params(args.config_file, args.config_name)
 
+  params.train_dir = args.train_dir
+  params.data_dir = args.data_dir
+  params.start_new_model = args.start_new_model
+  params.num_gpus = args.n_gpus
+  params.job_name = args.job_name
+  params.local_rank = args.local_rank
+  params.ps_hosts = args.ps_hosts
+  params.worker_hosts = args.worker_hosts
+  params.master_host = args.master_host
+  params.master_port = args.master_port
+  params.task_index = args.task_index
 
-def main(_):
-
-  if not FLAGS.train_dir or not FLAGS.data_dir:
-    raise ValueError("train_dir and data_dir need to be set.")
-
-  params = utils.load_params(FLAGS.config_file, FLAGS.config_name)
-  params.train_dir = FLAGS.train_dir
-  params.data_dir = FLAGS.data_dir
-  params.start_new_model = FLAGS.start_new_model
-  params.num_gpus = FLAGS.n_gpus
-  params.job_name = FLAGS.job_name
-  params.local_rank = FLAGS.local_rank
-  params.ps_hosts = FLAGS.ps_hosts
-  params.worker_hosts = FLAGS.worker_hosts
-  params.controller_host = FLAGS.controller_host
-  params.master_host = FLAGS.master_host
-  params.master_port = FLAGS.master_port
-  params.task_index = FLAGS.task_index
-
-  if FLAGS.backend.lower() == "tensorflow":
-    from neuralnet.tensorflow.train import Trainer
-  elif FLAGS.backend.lower() == "pytorch":
-    from neuralnet.pytorch.train import Trainer
-  else:
-    raise ValueError(
-      "Backend not recognized. Choose between Tensorflow and PyTorch.")
   trainer = Trainer(params)
   trainer.run()
 
 
 if __name__ == '__main__':
-  app.run(main)
+
+  parser = argparse.ArgumentParser(description='Main train script.')
+
+  parser.add_argument("--config_file", type=str,
+                      help="Name of the yaml config file.")
+  parser.add_argument("--config_name", type=str, default="train",
+                      help="Define the execution mode.")
+  parser.add_argument("--train_dir", type=str, required=True,
+                      help="Name of the training directory")
+  parser.add_argument("--data_dir", type=str, required=True,
+                      help="Name of the data directory")
+  parser.add_argument("--start_new_model", type=bool, default=True,
+                      help="Start training a new model or restart an existing one.")
+  parser.add_argument("--job_name", type=str, choices=('ps', 'worker', ''),
+                      help="Type of job 'ps', 'worker', ''.")
+  parser.add_argument("--n_gpus", type=int, default=4, 
+                      help="Number of GPUs to use.")
+  parser.add_argument("--local_rank", type=int, default=0, 
+                      help="Define local rank of the worker.")
+  parser.add_argument("--ps_hosts", type=str,
+                      help="Comma-separated list of target hosts.")
+  parser.add_argument("--worker_hosts", type=str, 
+                      help="Comma-separated list of target hosts.")
+  parser.add_argument("--master_host", type=str,
+                      help="ip/hostname of the master.")
+  parser.add_argument("--master_port", type=str,
+                      help="port of the master.")
+  parser.add_argument("--task_index", type=int, default=0,
+                      help="Index of task within the job")
+
+  args = parser.parse_args()
+  main(args)
+
 
 

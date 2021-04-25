@@ -8,31 +8,11 @@ dense: &dense
   hidden: 0
   use_bias: True
 
-diagonal_circulant: &diagonal_circulant
-  n_layers: 5
-  use_diag: True
-  use_bias: True
-  alpha: 1.414
-  activation_slope: 0.1
-  use_batch_norm: True
-  pooling: max
-
-conv_circulant: &conv_circulant
-  use_diag: False
-  use_bias: True
-  activation: relu6
-
 wide_resnet: &wide_resnet
   widen_factor: 10
   depth: 28
   leaky_slope: 0.1
   dropout: 0.3
-
-structured: &structured
-  rank: 1
-  class_type: toeplitz
-  n_layers: 3
-
 
 ################################
 ### Learning Rate Parameters ###
@@ -165,18 +145,6 @@ fgsm: &adv_params_fgsm
   targeted: False
 
 ###########################
-###  Noise Parameters   ###
-###########################
-
-noise_params: &noise_params
-  distribution: uniform
-  loc_normal: 0.
-  scale_normal: 0.25
-  scale_uniform: 0.20
-  low: 0
-  high: 1
-
-###########################
 ### Training Parameters ###
 ###########################
 
@@ -185,8 +153,6 @@ train: &TRAIN
   dataset: imagenet
   model: efficientnet-b0
   model_params: null
-  # model_params: 
-  #   <<: *efficientnet-b0
 
   adversarial_training: False
   adv_strategy: null
@@ -194,10 +160,6 @@ train: &TRAIN
   adversarial_training_params:
     <<: *adv_params_pgd_linf
 
-  add_noise: False
-  noise:
-    <<: *noise_params
-  
   # 4 machines with 8 gpus each: total batch size 4096
   init_learning_rate: 0.256
   lr_scheduler: lambda_lr
@@ -213,7 +175,7 @@ train: &TRAIN
   # Weight decay factor for training.
   weight_decay: 0.00001
 
-  lipschitz_regularization: True
+  lipschitz_regularization: False
   lipschitz_decay: 0.002
   lipschitz_bound_sample: 10
   lipschitz_computation: lipbound
@@ -270,14 +232,6 @@ attack: &ATTACK
   dump_files: False
   eot: False
   eot_samples: 80
-
-attack_fgsm:
-  <<: *TRAIN
-  <<: *EVAL
-  <<: *ATTACK
-  attack_method: fgsm
-  attack_params:
-    <<: *adv_params_fgsm
 
 attack_pgd_linf:
   <<: *TRAIN

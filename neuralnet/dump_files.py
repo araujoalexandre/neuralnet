@@ -18,32 +18,35 @@ class DumpFiles:
     self.logs_dir = "{}_logs".format(self.params.train_dir)
 
     attack_method = self.params.attack_method
-    eot_samples = getattr(self.params, 'eot_samples', 1)
+    # eot_samples = getattr(self.params, 'eot_samples', 1)
+    if getattr(self.params, 'eot', False) is False:
+      eot_samples = 1
+    else:
+      eot_samples = self.params.eot_samples
 
-    self.img_filename = "dump_{}_img_{}_{}.pkl".format(
-      attack_method, eot_samples, '{}')
-    self.adv_filename = "dump_{}_adv_{}_{}.pkl".format(
-      attack_method, eot_samples, '{}')
-    self.preds_filename = "dump_{}_preds_img_{}_{}".format(
-      attack_method, eot_samples, '{}')
-    self.preds_adv_filename = "dump_{}_preds_adv_{}_{}".format(
-      attack_method, eot_samples, '{}')
+    self.img_filename = "img_{}.pkl"
+    self.adv_filename = "adv_{}.pkl"
+    self.preds_filename = "preds_img_{}.pkl"
+    self.preds_adv_filename = "preds_adv_{}.pkl"
 
     # create main dump folder
     attack_folder = join(self.logs_dir, "dump_{}".format(attack_method))
     if not exists(attack_folder):
       os.mkdir(attack_folder)
     # create sub folder from sample params
-    sample_folder = join(attack_folder, "sample_{}".format(eot_samples))
-    if not exists(sample_folder):
-      os.mkdir(sample_folder)
+    # sample_folder = join(attack_folder, "sample_{}".format(eot_samples))
+    # if not exists(sample_folder):
+    #   os.mkdir(sample_folder)
+
     # create final dump folder from params
     params = self.params.attack_params
     folder_name = []
-    for k,v in params.items():
+    for k, v in params.items():
       folder_name.append('{}_{}'.format(k, str(v)))
+    folder_name.append('{}_{}'.format('eot_samples', eot_samples))
     folder_name = '_'.join(folder_name)
-    self.dump_folder = join(sample_folder, folder_name)
+    # self.dump_folder = join(sample_folder, folder_name)
+    self.dump_folder = join(attack_folder, folder_name)
     if not exists(self.dump_folder):
       os.mkdir(self.dump_folder)
 

@@ -14,21 +14,13 @@ from distutils.dir_util import copy_tree
 
 from script import GenerateScript
 
-_CLUSTER_MAX_TIME_JOB = 20
+DATE_FORMAT = "%Y-%m-%d_%H.%M.%S_%f"
+CLUSTER_MAX_TIME_JOB = 100
 
 LIST_ATTACKS = [
-  'fgm', 'fgsm', 'pgd', 'pgd_l2', 'pgd_linf', 'carlini', 'elasticnet']
+  'pgd_l2', 'pgd_linf', 'carlini', 'elasticnet']
 
-DATE_FORMAT = "%Y-%m-%d_%H.%M.%S_%f"
 
-def copytree(src, dst, symlinks=False, ignore=None):
-  for item in os.listdir(src):
-    s = os.path.join(src, item)
-    d = os.path.join(dst, item)
-    if os.path.isdir(s):
-      shutil.copytree(s, d, symlinks, ignore)
-    else:
-      shutil.copy2(s, d)
 
 class GenerateRunJobConfig:
 
@@ -37,7 +29,6 @@ class GenerateRunJobConfig:
                models_dir=None,
                train_dir=None,
                mode=None,
-               backend='tensorflow',
                with_eval=None,
                start_new_model=None,
                attack_name=None,
@@ -45,6 +36,8 @@ class GenerateRunJobConfig:
                n_cpus=None,
                n_gpus=None,
                partition=None,
+               constraint=None,
+               qos=None,
                time=None,
                dependency=None,
                template_config_params=None,
@@ -58,7 +51,6 @@ class GenerateRunJobConfig:
     self.models_dir = models_dir
     self.train_dir = train_dir
     self.mode = mode
-    self.backend = backend
     self.with_eval = with_eval
     self.start_new_model = start_new_model
     self.attack_name = attack_name
@@ -66,6 +58,8 @@ class GenerateRunJobConfig:
     self.n_cpus = n_cpus
     self.n_gpus = n_gpus
     self.slurm_partition = partition
+    self.constraint = constraint
+    self.qos = qos
     self.time = time
     self.dependency = dependency
     self.template_config_params = template_config_params
@@ -74,14 +68,17 @@ class GenerateRunJobConfig:
     self.dev = dev
     self.verbose = verbose
     self.dev_or_debug_mode = self.debug or self.dev
+    if self.train_dir == 'folder_debug':
+      self.dev_or_debug_mode = True
     self.distributed_config = distributed_config
 
     self.executable = 'sbatch'
     
-    self.projectdir = os.environ.get('PROJECTDIR', None)
-    assert self.projectdir is not None, \
-      "You need to define a project directory in environement variable"
-
+    # get project directory and project name
+    current_file_path = os.path.abspath(__file__)
+    self.project_dir = '/'.join(current_file_path.split('/')[:-2])
+    self.project_name = self.project_dir.split('/')[-1] 
+    
     # define the name of the log file
     if self.mode == 'train':
       self.log_filename = 'train'
@@ -104,7 +101,7 @@ class GenerateRunJobConfig:
     self.logs_dir  = '{}_logs'.format(self.train_dir)
     # we don't create the train directory because it will be created by the
     # train session, we remove folder_debug_logs before creating it again
-    if self.dev_or_debug_mode and exists(self.logs_dir):
+    if self.dev_or_debug_mode and exists(self.logs_dir) and self.mode == 'train':
       shutil.rmtree(self.logs_dir)
       os.mkdir(self.logs_dir)
     elif not exists(self.logs_dir):
@@ -117,13 +114,13 @@ class GenerateRunJobConfig:
       self.job_name = 'debug'
 
     # if we run the job on a cluster, we may run multiple jobs 
-    # to match the time required: if self.time > _CLUSTER_MAX_TIME_JOB, 
+    # to match the time required: if self.time > CLUSTER_MAX_TIME_JOB, 
     # we run multiple jobs with dependency
     if not self.dev_or_debug_mode:
-      njobs = self.time // _CLUSTER_MAX_TIME_JOB
-      self.times = [60 * _CLUSTER_MAX_TIME_JOB] * njobs
-      if self.time % _CLUSTER_MAX_TIME_JOB:
-        self.times += [(self.time % _CLUSTER_MAX_TIME_JOB) * 60]
+      njobs = self.time // CLUSTER_MAX_TIME_JOB
+      self.times = [60 * CLUSTER_MAX_TIME_JOB] * njobs
+      if self.time % CLUSTER_MAX_TIME_JOB:
+        self.times += [(self.time % CLUSTER_MAX_TIME_JOB) * 60]
       self.times = list(map(int, self.times))
     else:
       # in dev or debug mode, we only ask for 60 minutes
@@ -139,9 +136,9 @@ class GenerateRunJobConfig:
     if self.mode == 'train' and self.start_new_model:
       self.config_path = self.make_yaml_config()
       # copy the src code into config folder
-      src_folder = join(self.projectdir, 'neuralnet')
-      if not exists(join(self.logs_dir, 'neuralnet')):
-        copy_tree(src_folder, join(self.logs_dir, 'neuralnet'))
+      src_folder = join(self.project_dir, self.project_name)
+      if not exists(join(self.logs_dir, self.project_name)):
+        copy_tree(src_folder, join(self.logs_dir, self.project_name))
 
     elif self.mode in ('eval', 'attack', 'eval_with_noise') or \
           (self.mode == 'train' and not self.start_new_model):
@@ -149,12 +146,24 @@ class GenerateRunJobConfig:
       assert exists(self.config_path), \
           "config.yaml not found in '{}'.".format(basename(self.train_dir))
 
+    if self.mode in ('eval', 'eval_with_noise', 'attack')  and self.dev_or_debug_mode:
+      # copy the src code into config folder in eval mode if debug mode activated 
+      # delete the folder first
+      src_folder = join(self.project_dir, self.project_name)
+      dst_folder = join(self.logs_dir, self.project_name)
+      if exists(dst_folder):
+        shutil.rmtree(dst_folder)
+      copy_tree(src_folder, dst_folder)
+
     # init script template object
     self.script_template = GenerateScript(
                         mode=self.mode,
+                        project_name=self.project_name,
                         train_dir=self.train_dir,
                         job_name=self.job_name,
                         partition=self.slurm_partition,
+                        constraint=self.constraint,
+                        qos=self.qos,
                         n_gpus=self.n_gpus,
                         n_cpus=self.n_cpus,
                         dependency=self.dependency,
@@ -163,7 +172,6 @@ class GenerateRunJobConfig:
                         override_params=self.override_params,
                         log_filename=self.log_filename,
                         config_file=self.config_path,
-                        backend=self.backend,
                         start_new_model=self.start_new_model,
                         dev_mode=self.dev_or_debug_mode,
                         distributed_config=self.distributed_config)
@@ -171,14 +179,10 @@ class GenerateRunJobConfig:
 
   def make_yaml_config(self):
     # load the template and populate the values
-    if self.backend == 'tensorflow':
-      config_path = join(
-        self.projectdir, 'config', 'tensorflow', self.config_file)
-    else:
-      config_path = join(
-        self.projectdir, 'config', 'pytorch', self.config_file)
+    config_path = join(self.project_dir, 'config', self.config_file)
     assert exists(config_path), \
-          "config file '{}' does not exist".format(self.config_file)
+        "config file '{}' does not exist in '{}'".format(
+          self.config_file, join(self.project_dir, 'config'))
     with open(config_path) as f:
       config = f.read()
     if getattr(self, 'template_config_params', None):
@@ -302,9 +306,6 @@ def parse_grid_search(params):
 
 if __name__ == '__main__':
 
-  project_dir = os.environ.get('PROJECTDIR', None)
-  assert project_dir is not None, \
-    "A project directory needs to be set in environnement variables"
   work_dir = os.environ.get('WORKDIR', None)
   assert work_dir is not None, \
     "A working directory needs to be set in environnement variables"
@@ -321,9 +322,6 @@ if __name__ == '__main__':
   parser.add_argument("--mode", type=str, default="train",
                         choices=("train", "eval", "attack", "eval_with_noise"),
                         help="Choose job type train, eval, attack.")
-  parser.add_argument("--backend", type=str, default="pytorch",
-                        choices=("tensorflow", "tf", "pytorch", "torch", "py"),
-                        help="Choose job type train, eval, attack.")
   parser.add_argument("--no_eval", action="store_true", default=False,
                         help="Run the evaluation after training.")
   parser.add_argument("--models_dir", type=str,
@@ -334,6 +332,10 @@ if __name__ == '__main__':
                         help="Set file to run")
   parser.add_argument("--partition", type=str, default="gpu_p13",
                         help="Define the slurm partition to use")
+  parser.add_argument("--constraint", type=str,
+                        help="Specify a list of constraints.")
+  parser.add_argument("--qos", type=str,
+                        help="Specify a quality of service.")
   parser.add_argument("--time", type=int, default=20,
                         help="max time for the job")
   parser.add_argument("--dependency", type=int, default=0,
@@ -369,11 +371,6 @@ if __name__ == '__main__':
   # parse all arguments 
   args = parser.parse_args()
 
-  if args.backend == 'tf':
-    args.backend = 'tensorflow'
-  elif args.backend in ['torch', 'py']:
-    args.backend = 'pytorch'
-
   if args.partition == 'gpu_p13':
     args.n_gpus = 4
     args.n_cpus = 40
@@ -382,7 +379,7 @@ if __name__ == '__main__':
     args.n_cpus = 40
 
   # if run with PyTorch, we always use distributed training
-  if args.backend == 'pytorch' or (args.nodes > 1 and args.mode == 'train'):
+  if args.mode == 'train':
     assert args.num_ps <= args.nodes // 2, \
         "Number of parameter server seems to high."
     distributed_config = {
@@ -430,7 +427,6 @@ if __name__ == '__main__':
     config_file=args.config,
     train_dir=args.train_dir,
     mode=args.mode,
-    backend=args.backend,
     with_eval=not args.no_eval,
     start_new_model=start_new_model,
     models_dir=args.models_dir,
@@ -439,6 +435,8 @@ if __name__ == '__main__':
     n_cpus=args.n_cpus,
     n_gpus=args.n_gpus,
     partition=args.partition,
+    constraint=args.constraint,
+    qos=args.qos,
     time=args.time,
     dependency=args.dependency,
     override_params=args.override_params,

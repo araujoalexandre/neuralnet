@@ -13,4 +13,4 @@ def resnet(params, num_classes, is_training):
   elif params.model_params['depth'] == 152:
     return models.resnet152()
   else:
-    raise ValueError('Depth not recopgbnized.')
+    raise ValueError('Depth not recognized.')

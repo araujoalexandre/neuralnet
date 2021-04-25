@@ -6,15 +6,13 @@ import re
 import socket
 import pprint
 import logging
-from os.path import join
-from os.path import exists
+from os.path import join, exists, basename
 
-import utils as global_utils
+import utils
 from dump_files import DumpFiles
-from . import utils
 from .models import model_config
-
 from .dataset.readers import readers_config
+from .randomized_smoothing import Smooth
 
 import numpy as np
 import torch
@@ -30,17 +28,16 @@ class Evaluator:
     # Set up environment variables before doing any other global initialization to
     # make sure it uses the appropriate environment variables.
     utils.set_default_param_values_and_env_vars(params)
-
     self.params = params
 
     # Setup logging & log the version.
-    global_utils.setup_logging(params.logging_verbosity)
-    logging.info("Pytorch version: {}.".format(torch.__version__))
-    logging.info("Hostname: {}.".format(socket.gethostname()))
+    utils.setup_logging(params.logging_verbosity)
 
     # print self.params parameters
     pp = pprint.PrettyPrinter(indent=2, compact=True)
     logging.info(pp.pformat(params.values()))
+    logging.info("Pytorch version: {}.".format(torch.__version__))
+    logging.info("Hostname: {}.".format(socket.gethostname()))
 
     self.train_dir = self.params.train_dir
     self.logs_dir = "{}_logs".format(self.train_dir)
@@ -49,7 +46,7 @@ class Evaluator:
     self.num_gpus = self.params.num_gpus
 
     # create a mesage builder for logging
-    self.message = global_utils.MessageBuilder()
+    self.message = utils.MessageBuilder()
 
     if self.params.cudnn_benchmark:
       cudnn.benchmark = True
@@ -63,33 +60,32 @@ class Evaluator:
       raise IOError("'data_pattern' was not specified. "
         "Nothing to evaluate.")
 
-    # load reader and model
+    # load reader
     self.reader = readers_config[self.params.dataset](
       self.params, self.batch_size, self.num_gpus, is_training=False)
+
+    # load model
     self.model = model_config.get_model_config(
         self.params.model, self.params.dataset, self.params,
         self.reader.n_classes, is_training=False)
-    # TODO: get the loss another way
-    self.criterion = torch.nn.CrossEntropyLoss().cuda()
-
+    # add normalization as first layer of model
+    if self.params.add_normalization:
+      normalize_layer = self.reader.get_normalize_layer()
+      self.model = torch.nn.Sequential(normalize_layer, self.model)
     self.model = torch.nn.DataParallel(self.model)
     self.model = self.model.cuda()
 
-    self.add_noise = False
-    eot = getattr(self.params, 'eot', False)
-    if getattr(self.params, 'add_noise', False) and eot == False:
-      self.add_noise = True
-      self.noise = utils.AddNoise(self.params)
+    # init loss
+    self.criterion = torch.nn.CrossEntropyLoss().cuda()
 
+    # save files for analysis
+    if self.params.dump_files:
+      assert self.params.eval_under_attack, \
+          "dumping files only available when under attack"
+      self.dump = DumpFiles(params)
+
+    # eval under attack
     if self.params.eval_under_attack:
-      if self.params.dump_files:
-        self.dump = DumpFiles(params)
-      if eot:
-        attack_model = utils.EOTWrapper(
-          self.model, self.reader.n_classes, self.params)
-      else:
-        attack_model = self.model
-
       attack_params = self.params.attack_params
       self.attack = utils.get_attack(
                       self.model,
@@ -97,16 +93,11 @@ class Evaluator:
                       self.params.attack_method,
                       attack_params)
 
-
-    # add normalization as first layer of model
-    if getattr(self.reader, 'normalize_mean', False):
-      original_forward = self.model.forward
-      def new_forward(inputs):
-        inputs = F.normalize(
-          inputs, self.reader.normalize_mean, self.reader.normalize_std)
-        return original_forward(inputs)
-      self.model.forward = new_forward
-
+    if self.params.additive_noise or self.params.adaptive_noise:
+      # define Smooth classifier
+      dim = np.product(self.reader.img_size[1:])
+      self.model = Smooth(
+        self.model, self.params, self.reader.n_classes, dim)
 
   def run(self):
     """Run evaluation of model or eval under attack"""
@@ -146,13 +137,12 @@ class Evaluator:
     # those variables are updated in eval_loop
     self.best_global_step = None
     self.best_accuracy = None
-    ckpts = global_utils.get_list_checkpoints(
-      self.train_dir, backend='pytorch')
+    ckpts = utils.get_list_checkpoints(self.train_dir)
     for ckpt in ckpts[::-1]:
       # remove first checkpoint model.ckpt-0
       if 'model.ckpt-0' in ckpt: continue
       logging.info(
-        "Loading checkpoint for eval: {}".format(ckpt))
+        "Loading checkpoint for eval: {}".format(basename(ckpt)))
       global_step, epoch = self.load_ckpt(ckpt)
       self.eval_loop(global_step, epoch)
 
@@ -166,9 +156,7 @@ class Evaluator:
   def _run_under_attack(self):
     # normal evaluation has already been done
     # we get the best checkpoint of the model
-    best_checkpoint, global_step = \
-        global_utils.get_best_checkpoint(
-          self.logs_dir, backend='pytorch')
+    best_checkpoint, global_step = utils.get_best_checkpoint(self.logs_dir)
     logging.info("Loading '{}'".format(best_checkpoint.split('/')[-1]))
     global_step, epoch = self.load_ckpt(best_checkpoint)
     self.eval_attack(global_step, epoch)
@@ -198,12 +186,6 @@ class Evaluator:
         batch_start_time = time.time()
         inputs, labels = data
         inputs, labels = inputs.cuda(), labels.cuda()
-        if self.add_noise:
-          inputs = self.noise(inputs)
-
-        assert np.allclose(float(inputs.min().detach().cpu()), 0)
-        assert np.allclose(float(inputs.max().detach().cpu()), 1)
-
         outputs = self.model(inputs)
 
         loss = self.criterion(outputs, labels)
@@ -247,13 +229,10 @@ class Evaluator:
       batch_start_time = time.time()
       inputs, labels = data
       inputs, labels = inputs.cuda(), labels.cuda()
-      if self.add_noise:
-        inputs = self.noise(inputs)
-
-      assert np.allclose(float(inputs.min().detach().cpu()), 0)
-      assert np.allclose(float(inputs.max().detach().cpu()), 1)
 
       # craft attack
+      if inputs.min() < 0 or inputs.max() > 1:
+        raise ValueError('Input values should be in the [0, 1] range.')
       inputs_adv = self.attack.perturb(inputs, labels)
 
       # predict

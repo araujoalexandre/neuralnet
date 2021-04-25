@@ -10,10 +10,9 @@ import glob
 from os.path import join
 from os.path import exists
 
-import utils as global_utils
+import utils
 from dump_files import DumpFiles
 from pkl_utils import pickle_load
-from . import utils
 from .models import model_config
 from .dataset.readers import readers_config
 from .randomized_smoothing import Smooth
@@ -32,17 +31,16 @@ class Evaluator:
     # Set up environment variables before doing any other global initialization to
     # make sure it uses the appropriate environment variables.
     utils.set_default_param_values_and_env_vars(params)
-
     self.params = params
 
-    # Setup logging & log the version.
-    global_utils.setup_logging(params.logging_verbosity)
-    logging.info("Pytorch version: {}.".format(torch.__version__))
-    logging.info("Hostname: {}.".format(socket.gethostname()))
+    # Setup logging
+    utils.setup_logging(params.logging_verbosity)
 
     # print self.params parameters
     pp = pprint.PrettyPrinter(indent=2, compact=True)
     logging.info(pp.pformat(params.values()))
+    logging.info("Pytorch version: {}.".format(torch.__version__))
+    logging.info("Hostname: {}.".format(socket.gethostname()))
 
     self.train_dir = self.params.train_dir
     self.logs_dir = "{}_logs".format(self.train_dir)
@@ -51,7 +49,7 @@ class Evaluator:
     self.num_gpus = self.params.num_gpus
 
     # create a mesage builder for logging
-    self.message = global_utils.MessageBuilder()
+    self.message = utils.MessageBuilder()
 
     if self.params.cudnn_benchmark:
       cudnn.benchmark = True
@@ -65,54 +63,33 @@ class Evaluator:
       raise IOError("'data_pattern' was not specified. "
         "Nothing to evaluate.")
 
-    # load reader and model
+    # load reader
     self.reader = readers_config[self.params.dataset](
       self.params, self.batch_size, self.num_gpus, is_training=False)
+
+    # load model
     self.model = model_config.get_model_config(
         self.params.model, self.params.dataset, self.params,
         self.reader.n_classes, is_training=False)
-
+    # add normalization as first layer of model
+    if self.params.add_normalization:
+      normalize_layer = self.reader.get_normalize_layer()
+      self.model = torch.nn.Sequential(normalize_layer, self.model)
     self.model = torch.nn.DataParallel(self.model)
     self.model = self.model.cuda()
     self.model.eval()
 
-    # add normalization as first layer of model
-    if getattr(self.reader, 'normalize_mean', False):
-      original_forward = self.model.forward
-      def new_forward(inputs):
-        inputs = F.normalize(
-          inputs, self.reader.normalize_mean, self.reader.normalize_std)
-        return original_forward(inputs)
-      self.model.forward = new_forward
-
     # define Smooth classifier
-    # we use scale as a common setting between normal and uniform 
-    self.distribution = self.params.noise['distribution']
-    if self.distribution == 'normal':
-      self.noise_params = {
-        'sigma': self.params.noise['normal']['sigma'],
-        'scale': self.params.noise['normal']['sigma']
-      }
-    elif self.distribution == 'uniform':
-      self.noise_params = {
-        'scale': self.params.noise['uniform']['scale'],
-        'low': self.params.noise['uniform']['low'],
-        'high': self.params.noise['uniform']['high']
-      }
-    self.batch_size_sample = self.params.noise['batch_size']
-    self.sample_n0= self.params.noise['N0']
-    self.sample_n = self.params.noise['N']
-    self.alpha = self.params.noise['alpha']
+    dim = np.product(self.reader.img_size[1:])
     self.smooth_model = Smooth(
-      self.model, self.reader.n_classes, self.distribution, self.noise_params)
+      self.model, self.params, self.reader.n_classes, dim)
+  
 
   def run(self):
     """Run evaluation of model with randomized smooting"""
     # normal evaluation has already been done
     # we get the best checkpoint of the model
-    best_checkpoint, global_step = \
-        global_utils.get_best_checkpoint(
-          self.logs_dir, backend='pytorch')
+    best_checkpoint, global_step = utils.get_best_checkpoint(self.logs_dir)
     logging.info("Loading '{}'".format(best_checkpoint.split('/')[-1]))
     global_step, epoch = self.load_ckpt(best_checkpoint)
     self.eval(global_step, epoch)
@@ -143,7 +120,8 @@ class Evaluator:
   def _eval_with_noise_and_certify(self, data_loader): 
 
     logging.info("Eval with noise and Certify")
-    logging.info("{} noise -- {}".format(self.distribution, self.noise_params['scale']))
+    logging.info("{} noise -- {}".format(
+      self.params.noise_distribution, self.params.noise_scale))
 
     running_accuracy = 0
     running_accuracy_adv = 0
@@ -163,17 +141,16 @@ class Evaluator:
       accuracy = running_accuracy / running_inputs
 
       # predict with noise
-      for ii, x in enumerate(inputs):
-        with torch.no_grad():
-          cert_class, cert_radius, outputs_rs = self.smooth_model.certify(
-            x, self.sample_n0, self.sample_n, self.alpha, self.batch_size_sample)
+      with torch.no_grad():
+        for ii, x in enumerate(inputs):
+          cert_class, cert_radius, outputs_rs = self.smooth_model.certify(x)
 
-        results = f"{batch_n};{ii};{self.noise_params['scale']:.2f};{labels[ii]};"
-        results += ";".join(["{:.2f}".format(x) for x in outputs[ii].data]) + ";"
-        results += ";".join(["{:.2f}".format(x) for x in outputs_rs.data]) + ";"
-        results += f"{cert_class};{cert_radius:.4f}\n"
-        self.results_file.write(results)
-        self.results_file.flush()
+          results = f"{batch_n};{ii};{self.params.noise_scale:.2f};{labels[ii]};"
+          results += ";".join(["{:.2f}".format(x) for x in outputs[ii].data]) + ";"
+          results += ";".join(["{:.2f}".format(x) for x in outputs_rs.data]) + ";"
+          results += f"{cert_class};" + ';'.join([f'{x:.4f}' for x in cert_radius]) + ";"
+          self.results_file.write(results)
+          self.results_file.flush()
  
       seconds_per_batch = time.time() - batch_start_time
       examples_per_second = inputs.size(0) / seconds_per_batch
@@ -184,7 +161,8 @@ class Evaluator:
   def _init_results_files(self, from_pickle):
     ext = '' if not from_pickle else '_from_pickle'
     filename = "stats_eval_noise_{}_{:.2f}_samples_{}{}.txt".format(
-      self.distribution, self.noise_params['scale'], self.sample_n, ext)
+      self.params.noise_distribution, self.params.noise_scale,
+      self.params.certificate['N'], ext)
     self.results_file = open(join(self.logs_dir, filename), 'w')
 
   def _data_loader_pickle(self):

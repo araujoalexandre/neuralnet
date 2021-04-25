@@ -17,6 +17,7 @@ _model_name_to_imagenet_model = {
     'efficientnet-b4': efficientnet.create_efficientnet_model,
     'efficientnet-b5': efficientnet.create_efficientnet_model,
     'efficientnet-b6': efficientnet.create_efficientnet_model,
+    'efficientnet-b7': efficientnet.create_efficientnet_model,
 }
 
 _model_name_to_cifar_model = {

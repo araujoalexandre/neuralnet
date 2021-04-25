@@ -4,15 +4,17 @@ import shutil
 from os.path import join, exists, dirname
 
 
-
 class GenerateScript:
   """Create of job script for local or slurm cluster"""
 
   def __init__(self, 
                mode='train',
+               project_name=None,
                train_dir=None,
                job_name=None,
                partition='gpu_p1',
+               constraint=None,
+               qos=None,
                n_gpus=4,
                n_cpus=30,
                dependency=None,
@@ -20,7 +22,6 @@ class GenerateScript:
                attack_name=None,
                log_filename=None,
                config_file=None,
-               backend='tensorflow',
                start_new_model=True,
                override_params=None,
                dev_mode=False,
@@ -36,6 +37,7 @@ class GenerateScript:
     self.logs_dir = '{}_logs'.format(train_dir)
     self.data_dir = os.environ.get('DATADIR')
     self.project_dir = self.logs_dir
+    self.project_name = project_name
 
     # slrum config
     self.account = os.environ.get('slurm_account', None)
@@ -43,6 +45,8 @@ class GenerateScript:
       "Slurm account needs to be set in environment variables"
     self.job_name = job_name
     self.partition = partition
+    self.constraint = constraint
+    self.qos = qos
     self.n_gpus = n_gpus
     self.n_cpus = n_cpus
     self.dependency = dependency
@@ -59,8 +63,8 @@ class GenerateScript:
       self.distributed = False
       self.nodes = 1
 
-    if backend  == 'pytorch' and self.distributed:
-      # add torch.distributed.launch config before main script
+    # add torch.distributed.launch config before main script
+    if self.distributed:
       setup_dist_pytorch = [' -m torch.distributed.launch']
       setup_dist_pytorch.append('--nnodes {}'.format(self.nodes))
       setup_dist_pytorch.append('--node_rank ${node_rank}')
@@ -74,7 +78,6 @@ class GenerateScript:
     self.log_filename = log_filename
     self.config_file = config_file
     self.attack_name = attack_name
-    self.backend = backend
     self.start_new_model = start_new_model
     self.override_params = override_params
 
@@ -106,6 +109,8 @@ class GenerateScript:
     slurm_header.append('--error={}/slurm_log-%j.err'.format(self.logs_dir))
     slurm_header.append('--time={}'.format(self.time))
     slurm_header.append('--partition={}'.format(self.partition))
+    if self.constraint is not None:
+      slurm_header.append('--constraint={}'.format(self.constraint))
     slurm_header.append('--nodes={}'.format(self.nodes))
     slurm_header.append('--gres=gpu:{}'.format(self.n_gpus))
     slurm_header.append('--wait-all-nodes=1')
@@ -114,17 +119,15 @@ class GenerateScript:
       slurm_header.append('--dependency=afterany:{}'.format(self.dependency))
     if self.dev_mode:
       slurm_header.append('--qos=qos_gpu-dev')
+    if self.qos:
+      slurm_header.append('--qos={}'.format(self.qos))
     slurm_header = ['{} {}'.format('#SBATCH', arg) for arg in slurm_header]
     slurm_header = '\n'.join(slurm_header)
     return slurm_header
 
   def create_load_cmd(self):
     load_cmd = 'module purge\n'
-    if self.backend == 'tensorflow':
-      load_cmd += 'nccl/2.5.6-2-cuda\n'
-      load_cmd += 'module load tensorflow-gpu/py3/1.14'
-    elif self.backend == 'pytorch':
-      load_cmd += 'module load pytorch-gpu'
+    load_cmd += 'module load pytorch-gpu/py3/1.8.0'
     return load_cmd
 
   def unset_proxy(self):
@@ -183,7 +186,6 @@ class GenerateScript:
       args.append('--config_name=attack_{}'.format(self.attack_name))
     args.append('--train_dir={}'.format(self.train_dir))
     args.append('--data_dir={}'.format(self.data_dir))
-    args.append('--backend={}'.format(self.backend))
     args.append('--n_gpus={}'.format(self.n_gpus))
     if self.override_params and self.mode in ('eval', 'attack', 'eval_with_noise'):
       args.append("--override_params='{}'".format(self.override_params))
@@ -194,7 +196,7 @@ class GenerateScript:
       args.append('--task_index={}'.format(task_id))
 
     args = ' '.join(args)
-    file_to_run = join(self.project_dir, 'neuralnet', self.file_to_run)
+    file_to_run = join(self.project_dir, self.project_name, self.file_to_run)
     python_cmd = '{} {} {}'.format(self.python_exec, file_to_run, args)
     return python_cmd
 
@@ -208,12 +210,11 @@ class GenerateScript:
       job_script += '{}\n'.format(self.create_distribution_setup())
 
     if self.distributed:
-      if self.backend == 'pytorch':
-        job_script += "master_host=${workers[0]}\n"
-        job_script += "master_port={}\n\n".format(
-          self.distributed_config['ps_port'])
-        # job_script += 'export NCCL_DEBUG=INFO\n\n'
-        job_script += "export OMP_NUM_THREADS=1\n"
+      job_script += "master_host=${workers[0]}\n"
+      job_script += "master_port={}\n\n".format(
+        self.distributed_config['ps_port'])
+      # job_script += 'export NCCL_DEBUG=INFO\n\n'
+      job_script += "export OMP_NUM_THREADS=1\n"
       if self.num_ps:
         for ps_id in range(self.num_ps):
           job_script += self.create_srun_cmd(
@@ -232,5 +233,4 @@ class GenerateScript:
     else:
       job_script += self.create_srun_cmd()
       job_script += '{}'.format(self.create_python_cmd()) 
-      # job_script += ' {}'.format(self.redirect_logs())
     return job_script

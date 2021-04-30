@@ -331,6 +331,8 @@ class Trainer:
 
   def _adaptive_noise(self, step, inputs, labels):
 
+    self.mean_noise = 0.
+    batch_size, *img_size = inputs.shape
     n_classes = self.reader.n_classes
     n_sample = self.params.n_sample
 
@@ -342,7 +344,6 @@ class Trainer:
     if step == 0 and self.local_rank == 0:
       self._check_memory_limit(inputs, n_sample)
 
-    # check if we have correct prediction 
     preds = self.model(inputs).argmax(axis=1)
     correct = (preds == labels)
     n_correct = correct.sum()
@@ -351,21 +352,22 @@ class Trainer:
     if n_correct == 0:
       return inputs
 
-    batch_size, *img_size = inputs.shape
     idx1 = list(range(n_correct))
     idx2 = list(labels[correct])
     # generate the noise level to compute the gradient
-    scales = np.arange(self.noise_scale, 0., -self.noise_step)
-    scales = scales[:self.n_scales][::-1].copy()
+    # scales = np.arange(self.noise_scale, 0., -self.noise_step)
+    # scales = scales[:self.n_scales][::-1].copy()
+    max_noise_scale = self.noise_scale * 2 - 0.05
+    scales = np.linspace(0.05, max_noise_scale, num=self.n_scales)
     if step == 0 and self.local_rank == 0:
-      logging.info('Scales for Adaptive Noise: {}, with samples {}'.format(
-        scales, n_sample))
+      scales_str = ', '.join(['{:.2f}'.format(x) for x in scales])
+      logging.info('Scales for Adaptive Noise: [{}], with samples {}, mean {}'.format(
+        scales_str, n_sample, np.mean(scales)))
 
     self.model.eval()
     with torch.no_grad():
       probabilities = torch.zeros((n_correct, self.n_scales+1))
       probabilities[:, 0] = 1
-
       x = inputs[correct, :, :, :].repeat(n_sample, 1, 1, 1)
       x = x.reshape(n_sample * n_correct, *img_size) 
 
@@ -378,25 +380,28 @@ class Trainer:
           n_sample, n_correct, n_classes).mean(axis=0)
         proba_correct_class = predictions_rs[idx1, idx2]
         probabilities[:, i+1] = proba_correct_class
+
     self.model.train()
 
+    # we take the index of the first value below 1
+    idx_diff = ((probabilities < 1)*1).argmax(axis=1)
     noise_level = torch.FloatTensor([0] + list(scales))
     noise_level = noise_level.repeat(n_correct, 1)
-    gradients = -1 * torch.diff(probabilities, axis=1)
-    idx_max_diff = gradients.argmax(axis=1) + 1
-    noise_level = noise_level[idx1, idx_max_diff] 
-    noise_level[gradients.sum(axis=1) == 0] = 0
+    noise_level = noise_level[idx1, idx_diff] 
+
+    if noise_level.sum() == 0:
+      return inputs
 
     # inject noise to inputs
     adaptive_scales = (correct * 1.).to(inputs.device)
     adaptive_scales[correct] = noise_level.to(inputs.device)
     adaptive_scales = adaptive_scales.reshape(-1, 1)
+    self.mean_noise = adaptive_scales.mean()
 
     inputs = inputs.reshape(batch_size, -1)
     noise = self.noise(inputs).reshape(batch_size, -1)
     inputs = inputs + noise * adaptive_scales
     inputs = inputs.reshape(batch_size, *img_size)
-
     return inputs
 
 
@@ -427,7 +432,7 @@ class Trainer:
 
     total_loss = 0.
     outputs = self.model(inputs)
-    loss_ce = self.criterion(outputs, labels.cuda())
+    loss_ce = self.criterion(outputs, labels)
     total_loss += loss_ce
 
     if self.params.stability_training:
@@ -436,8 +441,8 @@ class Trainer:
       outputs = Categorical(logits=outputs)
       # the kl_divergence function convert the logits to softmax
       loss_stability_training = self.params.stability_training_lambda * \
-          kl_divergence(outputs_clean, outputs)
-      total_loss += loss_stability_training.mean()
+          kl_divergence(outputs_clean, outputs).mean()
+      total_loss += loss_stability_training
 
     if self.params.lipschitz_regularization and \
        epoch >= self.params.lipschitz_start_epoch:
@@ -476,6 +481,8 @@ class Trainer:
       self.message.add("step", step, width=5, format=".0f")
       self.message.add("lr", lr, format=".6f")
       self.message.add("ce", loss_ce, format=".4f")
+      if self.params.adaptive_noise:
+        self.message.add('m-noise', self.mean_noise, format=".2f")
       if self.params.lipschitz_regularization and \
          epoch >= self.params.lipschitz_start_epoch:
         self.message.add("lip", loss_lip, format=".4f")

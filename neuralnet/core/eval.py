@@ -25,19 +25,7 @@ class Evaluator:
 
   def __init__(self, params):
 
-    # Set up environment variables before doing any other global initialization to
-    # make sure it uses the appropriate environment variables.
-    utils.set_default_param_values_and_env_vars(params)
     self.params = params
-
-    # Setup logging & log the version.
-    utils.setup_logging(params.logging_verbosity)
-
-    # print self.params parameters
-    pp = pprint.PrettyPrinter(indent=2, compact=True)
-    logging.info(pp.pformat(params.values()))
-    logging.info("Pytorch version: {}.".format(torch.__version__))
-    logging.info("Hostname: {}.".format(socket.gethostname()))
 
     self.train_dir = self.params.train_dir
     self.logs_dir = "{}_logs".format(self.train_dir)
@@ -96,7 +84,7 @@ class Evaluator:
     if self.params.additive_noise or self.params.adaptive_noise:
       # define Smooth classifier
       dim = np.product(self.reader.img_size[1:])
-      self.model = Smooth(
+      self.smooth_model = Smooth(
         self.model, self.params, self.reader.n_classes, dim)
 
   def run(self):
@@ -176,9 +164,11 @@ class Evaluator:
   def eval_loop(self, global_step, epoch):
     """Run the evaluation loop once."""
 
-    running_accuracy = 0
     running_inputs = 0
-    running_loss = 0
+    running_accuracy = 0
+    running_accuracy_smooth = 0
+    # running_loss = 0
+    # running_loss_smooth = 0
     data_loader, _ = self.reader.load_dataset()
     for batch_n, data in enumerate(data_loader):
 
@@ -186,33 +176,44 @@ class Evaluator:
         batch_start_time = time.time()
         inputs, labels = data
         inputs, labels = inputs.cuda(), labels.cuda()
+        idx1 = list(range(inputs.shape[0]))
+
         outputs = self.model(inputs)
+        # loss = self.criterion(outputs, labels)
+        predicted = outputs.argmax(axis=1)
+        running_accuracy += predicted.eq(labels.data).cpu().sum().numpy()
+        running_inputs += inputs.size(0)
+        # running_loss += loss.cpu().numpy()
+        accuracy = running_accuracy / running_inputs
+        # loss = running_loss / (batch_n + 1)
 
-        loss = self.criterion(outputs, labels)
-        _, predicted = torch.max(outputs.data, 1)
-        seconds_per_batch = time.time() - batch_start_time
-        examples_per_second = inputs.size(0) / seconds_per_batch
+        outputs_smooth = self.smooth_model(inputs)
+        # loss_smooth = (-torch.log(outputs_smooth)[idx1, labels]).mean()
+        predicted_smooth = outputs_smooth.argmax(axis=1)
+        running_accuracy_smooth += predicted_smooth.eq(labels.data).cpu().sum().numpy()
+        # running_loss_smooth += loss_smooth.cpu().numpy()
+        accuracy_smooth = running_accuracy_smooth / running_inputs
+        # loss_smooth = running_loss_smooth / (batch_n + 1)
 
-      running_accuracy += predicted.eq(labels.data).cpu().sum().numpy()
-      running_inputs += inputs.size(0)
-      running_loss += loss.cpu().numpy()
-      accuracy = running_accuracy / running_inputs
-      loss = running_loss / (batch_n + 1)
+      seconds_per_batch = time.time() - batch_start_time
+      examples_per_second = inputs.size(0) / seconds_per_batch
 
       self.message.add('epoch', epoch)
       self.message.add('step', global_step)
-      self.message.add('accuracy', accuracy, format='.5f')
-      self.message.add('loss', loss, format='.5f')
+      # self.message.add('accuracy', accuracy, format='.5f')
+      # self.message.add('loss', loss, format='.5f')
+      self.message.add('accuracy', [accuracy, accuracy_smooth], format='.5f')
+      # self.message.add('loss', [loss, loss_smooth], format='.5f')
       self.message.add('imgs/sec', examples_per_second, format='.0f')
       logging.info(self.message.get_message())
 
-    if self.best_accuracy is None or self.best_accuracy < accuracy:
+    if self.best_accuracy is None or self.best_accuracy < accuracy_smooth:
       self.best_global_step = global_step
-      self.best_accuracy = accuracy
+      self.best_accuracy = accuracy_smooth
     self.message.add('--> epoch', epoch)
     self.message.add('step', global_step)
-    self.message.add('accuracy', accuracy, format='.5f')
-    self.message.add('loss', loss, format='.5f')
+    self.message.add('accuracy', accuracy_smooth, format='.5f')
+    # self.message.add('loss', loss, format='.5f')
     logging.info(self.message.get_message())
     logging.info("Done with batched inference.")
     return
@@ -222,7 +223,7 @@ class Evaluator:
 
     running_accuracy = 0
     running_inputs = 0
-    running_loss = 0
+    # running_loss = 0
     data_loader, _ = self.reader.load_dataset()
     for batch_n, data in enumerate(data_loader):
 
@@ -236,19 +237,19 @@ class Evaluator:
       inputs_adv = self.attack.perturb(inputs, labels)
 
       # predict
-      outputs = self.model(inputs)
-      outputs_adv = self.model(inputs_adv)
+      outputs = self.model_smooth(inputs)
+      outputs_adv = self.model_smooth(inputs_adv)
 
-      loss = self.criterion(outputs_adv, labels)
+      # loss = self.criterion(outputs_adv, labels)
       _, predicted = torch.max(outputs_adv.data, 1)
       seconds_per_batch = time.time() - batch_start_time
       examples_per_second = inputs.size(0) / seconds_per_batch
 
       running_accuracy += predicted.eq(labels.data).cpu().sum().numpy()
       running_inputs += inputs.size(0)
-      running_loss += loss.cpu().detach().numpy()
+      # running_loss += loss.cpu().detach().numpy()
       accuracy = running_accuracy / running_inputs
-      loss = running_loss / (batch_n + 1)
+      # loss = running_loss / (batch_n + 1)
 
       if self.params.dump_files:
         results = {
@@ -261,7 +262,7 @@ class Evaluator:
 
       self.message.add('', socket.gethostname())
       self.message.add('accuracy', accuracy, format='.5f')
-      self.message.add('loss', loss, format='.5f')
+      # self.message.add('loss', loss, format='.5f')
       self.message.add('imgs/sec', examples_per_second, format='.0f')
       logging.info(self.message.get_message())
 
@@ -269,7 +270,7 @@ class Evaluator:
     self.best_accuracy = accuracy
     self.message.add('', socket.gethostname())
     self.message.add('accuracy', accuracy, format='.5f')
-    self.message.add('loss', loss, format='.5f')
+    # self.message.add('loss', loss, format='.5f')
     logging.info(self.message.get_message())
     logging.info("Done with batched inference under attack.")
     return

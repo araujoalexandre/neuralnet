@@ -192,8 +192,11 @@ class LipschitzRegularization:
     return lip_loss
 
   def get_loss(self, epoch, model):
-    lip_cst = self.compute_full_network(model)
-    lipreg = self.decay * sum([torch.log(x) for x in lip_cst])
+    loss = 0.
+    for x in self.compute_full_network(model):
+      if x > 1:
+        loss += torch.log(x)
+    loss *= self.decay
     return lipreg
 
 

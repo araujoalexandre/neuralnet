@@ -1,8 +1,11 @@
 
 import logging
+import socket
+import pprint
 import argparse
 from os.path import join
 import utils
+import torch
 
 
 def main(args):
@@ -17,6 +20,19 @@ def main(args):
   params.data_dir = args.data_dir
   params.num_gpus = args.n_gpus
   params.start_new_model = False
+
+  # Set up environment variables before doing any other global initialization to
+  # make sure it uses the appropriate environment variables.
+  utils.set_default_param_values_and_env_vars(params)
+
+  # Setup logging & log the version.
+  utils.setup_logging(params.logging_verbosity)
+
+  # print self.params parameters
+  pp = pprint.PrettyPrinter(indent=2, compact=True)
+  logging.info(pp.pformat(params.values()))
+  logging.info("Pytorch version: {}.".format(torch.__version__))
+  logging.info("Hostname: {}.".format(socket.gethostname()))
 
   core_eval = __import__('core.{}'.format(config_name), fromlist=[''])
   evaluate = core_eval.Evaluator(params)

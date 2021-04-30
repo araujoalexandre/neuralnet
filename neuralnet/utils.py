@@ -217,7 +217,7 @@ def load_params(config_file, config_name, override_params=None):
   for k, v in data[config_name].items():
     params.add(k, v)
   if override_params:
-    logging.info('Overriding parameters of configuration file')
+    # logging.info('Overriding parameters of configuration file')
     params_to_override = json.loads(override_params)
     for key, value in params_to_override.items():
       params.override(key, value)
@@ -326,7 +326,7 @@ class Noise:
   def _sample_uniform(self, x):
     dim = np.product(x.shape[1:])
     radius = torch.rand((len(x), 1), device=x.device) ** (1 / dim)
-    radius *= 1 / np.sqrt(1 / dim)
+    radius *= np.sqrt(dim + 2)
     noise = torch.randn(x.shape, device=x.device).reshape(len(x), -1)
     noise = noise / torch.norm(noise, dim=1, p=2, keepdim=True) * radius
     return noise.reshape(x.shape)

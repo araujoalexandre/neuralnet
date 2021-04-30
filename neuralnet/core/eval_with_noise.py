@@ -3,8 +3,6 @@ import json
 import time
 import os
 import re
-import socket
-import pprint
 import logging
 import glob
 from os.path import join
@@ -28,19 +26,7 @@ class Evaluator:
 
   def __init__(self, params):
 
-    # Set up environment variables before doing any other global initialization to
-    # make sure it uses the appropriate environment variables.
-    utils.set_default_param_values_and_env_vars(params)
     self.params = params
-
-    # Setup logging
-    utils.setup_logging(params.logging_verbosity)
-
-    # print self.params parameters
-    pp = pprint.PrettyPrinter(indent=2, compact=True)
-    logging.info(pp.pformat(params.values()))
-    logging.info("Pytorch version: {}.".format(torch.__version__))
-    logging.info("Hostname: {}.".format(socket.gethostname()))
 
     self.train_dir = self.params.train_dir
     self.logs_dir = "{}_logs".format(self.train_dir)
@@ -124,7 +110,7 @@ class Evaluator:
       self.params.noise_distribution, self.params.noise_scale))
 
     running_accuracy = 0
-    running_accuracy_adv = 0
+    running_accuracy_smooth = 0
     running_inputs = 0
 
     for batch_n, (inputs, labels) in enumerate(data_loader):
@@ -135,7 +121,8 @@ class Evaluator:
       with torch.no_grad():
         outputs = self.model(inputs)
         outputs = torch.nn.functional.softmax(outputs, dim=1)
-      _, predicted = torch.max(outputs.data, 1)
+
+      predicted = outputs.argmax(axis=1)
       running_accuracy += predicted.eq(labels.data).cpu().sum().numpy()
       running_inputs += inputs.size(0)
       accuracy = running_accuracy / running_inputs
@@ -148,13 +135,17 @@ class Evaluator:
           results = f"{batch_n};{ii};{self.params.noise_scale:.2f};{labels[ii]};"
           results += ";".join(["{:.2f}".format(x) for x in outputs[ii].data]) + ";"
           results += ";".join(["{:.2f}".format(x) for x in outputs_rs.data]) + ";"
-          results += f"{cert_class};" + ';'.join([f'{x:.4f}' for x in cert_radius]) + ";"
+          results += f"{cert_class};" + ';'.join([f'{x:.4f}' for x in cert_radius]) + ";\n"
           self.results_file.write(results)
           self.results_file.flush()
- 
+
+          predicted_smooth = outputs_rs.argmax()
+          running_accuracy_smooth += (predicted_smooth == labels[ii])
+          accuracy_smooth = running_accuracy_smooth / running_inputs
+
       seconds_per_batch = time.time() - batch_start_time
       examples_per_second = inputs.size(0) / seconds_per_batch
-      self.message.add('accuracy', accuracy, format='.5f')
+      self.message.add('accuracy', [accuracy, accuracy_smooth], format='.5f')
       self.message.add('imgs/sec', examples_per_second, format='.2f')
       logging.info(self.message.get_message())
 

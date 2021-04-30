@@ -56,14 +56,11 @@ class Smooth(object):
 
   def __call__(self, inputs):
     """ Monte Carlo algorithm for evaluating the prediction of g at x.
-    With probability at least 1 - alpha, the class returned by this method will equal g(x).
-    This function uses the hypothesis test described in https://arxiv.org/abs/1610.03944
-    for identifying the top category of a multinomial distribution.
-    :param x: the input [channel x height x width]
-    :return: the predicted class, or ABSTAIN
+    :param inputs: the input [batch_size x channel x height x width]
+    :return: the predicted class
     """
     batch_size, *img_size = inputs.shape
-    x = inputs.repeat((1, self.sample_n0, 1, 1, 1))
+    x = inputs.repeat((self.sample_n0, 1, 1, 1, 1))
     x = x.reshape(self.sample_n0 * batch_size, *img_size)
     noise = self.noise(x) * self.noise_scale
     predictions = self.model(x + noise).argmax(axis=1)
@@ -112,7 +109,7 @@ class Smooth(object):
     """
     cAHat, pABar, proba = self.get_proba_lb(x)
     if pABar < 0.5:
-      return Smooth.ABSTAIN, 0.0, proba
+      return Smooth.ABSTAIN, (0.0, 0.0), proba
     else:
       radius = self.noise_scale * norm.ppf(pABar)
       return cAHat, (radius, 0.), proba
@@ -121,38 +118,56 @@ class Smooth(object):
     """ Algorithm for certifying with Uniform noise form L2 ball"""
     cAHat, pABar, proba = self.get_proba_lb(x)
     if pABar < 0.5:
-      return Smooth.ABSTAIN, 0.0, proba
+      return Smooth.ABSTAIN, (0.0, 0.0), proba
     else:
       radius1 = self._certify_uniform_worst_case(x, pABar)
-      radius2 = self._certify_uniform_with_grad(x, cAHat)
+      # radius2 = self._certify_uniform_with_grad(x, cAHat, radius1)
+      radius2 = 0
       return cAHat, (radius1, radius2), proba
 
   def _certify_uniform_worst_case(self, x, pABar):
     """ UniformBall L2 certifcate from Yang et al. https://arxiv.org/pdf/2002.08118.pdf """
-    lambda_ = self.noise_scale * (1 / np.sqrt(1 / self.dim + 2))
+    lambda_ = self.noise_scale * np.sqrt(self.dim + 2)
     radius = lambda_ * (
         2 - 4 * self.beta_dist.ppf(0.75 - 0.5 * pABar))
     return radius
 
-  def _certify_uniform_with_grad(self, x, cAHat):
+  def _certify_uniform_with_grad(self, x, cAHat, radius_worst_case):
     # binary search to find the certificate radius
     start = self.binary_search_lower
     end = self.binary_search_upper
+    # if start == 0: start = 0.0001
     while (end - start) > self.binary_search_tol:
+      # if end < radius_worst_case:
+      #   # abort if we are bellow the worst case
+      #   return 0
       mid = (start + end) / 2
       if self._eval_gradient(x, cAHat, self.sample_n, mid):
-        start = mid
-      else:
+        # start = mid
         end = mid
+      else:
+        # end = mid
+        start = mid
+      logging.info('binary search: {}   {}'.format(start, end))
     # we return the lower value found by the binary search
     return start
 
   def _eval_gradient(self, x, cAHat, sample_n, eps):
     pr1 = self._sample_noise(x, sample_n, self.noise_scale)[cAHat] / sample_n
     pr2 = self._sample_noise(x, sample_n, self.noise_scale+eps)[cAHat] / sample_n
-    k = (pr1 - pr2) / eps
-    ratio = self.noise_scale / (self.noise_scale + eps)
-    return k < ratio**self.dim * (1 / eps) * (1/2  - ratio  * (1 - pr1))
+    radius = self.noise_scale * np.sqrt(self.dim + 2)
+    eps_radius = eps * np.sqrt(self.dim + 2)
+    k = (pr2 - pr1) / eps_radius
+    # numerically unstable
+    # ratio1 = (radius / (radius + eps_radius))**self.dim
+    # ratio2 = ((radius + eps_radius) / radius)**self.dim
+    # return k > ratio1 * (1/eps) * (ratio2 * (1 - pr1) - 1/2) 
+    ratio1 = self.dim * np.log(radius / (radius + eps_radius))
+    ratio2 = self.dim * np.log((radius + eps_radius) / radius)
+    bound = np.exp(ratio1 - np.log(eps_radius) + ratio2 + np.log(1 - pr1)) - \
+        np.exp(-np.log(2) + ratio1 - np.log(eps_radius))
+    return k > bound
+
 
   def _sample_noise(self, x, num, noise_scale):
     """ Sample the base classifier's prediction under noisy corruptions of the input x.

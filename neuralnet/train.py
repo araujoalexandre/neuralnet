@@ -37,7 +37,7 @@ if __name__ == '__main__':
                       help="Name of the training directory")
   parser.add_argument("--data_dir", type=str, required=True,
                       help="Name of the data directory")
-  parser.add_argument("--start_new_model", type=bool, default=True,
+  parser.add_argument("--start-new-model", action="store_true", default=False,
                       help="Start training a new model or restart an existing one.")
   parser.add_argument("--job_name", type=str, choices=('ps', 'worker', ''),
                       help="Type of job 'ps', 'worker', ''.")

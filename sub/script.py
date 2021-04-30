@@ -176,7 +176,9 @@ class GenerateScript:
     args = []
     if self.mode == 'train':
       args.append('--config_file={}'.format(self.config_file))
-      args.append('--start_new_model={}'.format(self.start_new_model))
+      if self.start_new_model:
+        # args.append('--start-new-model={}'.format(self.start_new_model))
+        args.append('--start-new-model')
       args.append('--config_name=train')
     if self.mode == 'eval':
       args.append('--config_name=eval')

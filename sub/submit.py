@@ -322,7 +322,7 @@ if __name__ == '__main__':
   parser.add_argument("--mode", type=str, default="train",
                         choices=("train", "eval", "attack", "eval_with_noise"),
                         help="Choose job type train, eval, attack.")
-  parser.add_argument("--no_eval", action="store_true", default=False,
+  parser.add_argument("--no-eval", action="store_true", default=False,
                         help="Run the evaluation after training.")
   parser.add_argument("--models_dir", type=str,
                         help="Set path of trained folders.")

@@ -127,3 +127,10 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+
+script_accuracy_*
+script_check_*
+script_scancel_*
+script_attacks_*
+script_squeue_*

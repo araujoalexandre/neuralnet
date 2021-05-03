@@ -159,16 +159,15 @@ class Trainer:
                       attack_params)
 
     # init noise
-    if self.params.adaptive_noise and self.params.additive_noise:
-      raise ValueError("Adaptive and Additive Noise should not be set together")
     if self.params.adaptive_noise:
       if self.local_rank == 0:
-        logging.info('Training with Adaptive Noise: {} {}'.format(
-          self.params.noise_distribution, self.params.noise_scale))
-    elif self.params.additive_noise:
+        logging.info('Training with Adaptive Noise')
+
+    if self.params.additive_noise:
       if self.local_rank == 0:
         logging.info('Training with Noise: {} {}'.format(
           self.params.noise_distribution, self.params.noise_scale))
+
     if self.params.adaptive_noise or self.params.additive_noise:
       self.noise = utils.Noise(self.params)
 
@@ -355,8 +354,6 @@ class Trainer:
     idx1 = list(range(n_correct))
     idx2 = list(labels[correct])
     # generate the noise level to compute the gradient
-    # scales = np.arange(self.noise_scale, 0., -self.noise_step)
-    # scales = scales[:self.n_scales][::-1].copy()
     max_noise_scale = self.noise_scale * 2 - 0.05
     scales = np.linspace(0.05, max_noise_scale, num=self.n_scales)
     if step == 0 and self.local_rank == 0:
@@ -395,6 +392,7 @@ class Trainer:
     # inject noise to inputs
     adaptive_scales = (correct * 1.).to(inputs.device)
     adaptive_scales[correct] = noise_level.to(inputs.device)
+    adaptive_scales[~correct] = self.noise_scale
     adaptive_scales = adaptive_scales.reshape(-1, 1)
     self.mean_noise = adaptive_scales.mean()
 
@@ -423,12 +421,14 @@ class Trainer:
         raise ValueError('Input values should be in the [0, 1] range.')
       inputs = self.attack.perturb(inputs)
 
-    # Adaptive noise
+    # we inject noise
+    if self.params.additive_noise:
+      inputs = inputs + self.noise(inputs) * self.params.noise_scale
+
+    # We inject an adaptive noise
     if self.params.adaptive_noise:
       inputs = self._adaptive_noise(step, inputs, labels)
-    elif self.params.additive_noise:
-      inputs = inputs + self.noise(inputs) * self.params.noise_scale
-    
+
 
     total_loss = 0.
     outputs = self.model(inputs)

@@ -7,6 +7,9 @@ from numpy import pi
 from scipy.stats import norm as sp_norm
 from scipy.special import gamma, loggamma
 
+import matplotlib.pyplot as plt
+from matplotlib import cm
+from mpl_toolkits.mplot3d import Axes3D
 
 import vegas
 
@@ -143,7 +146,6 @@ class Certificate:
     points = 5000
 
     for i, dim in enumerate([5, 6, 7, 8, 9, 10, 15, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150, 200]):
-    # for i, dim in enumerate([40]):
 
       center = sigma0 * np.sqrt(dim - 2)
       x = np.array([center, 0]).reshape(1, 2)
@@ -154,24 +156,6 @@ class Certificate:
       width_support = support[1] - support[0]
       p1 = self.compute_integral(dim, sigma0, sigma1, eps, k1, log_k2, support)
 
-      # # we increase the support if necessary 
-      # p1 = 0.
-      # while p1 < 0.69:
-      #   p1 = self.compute_integral(dim, sigma0, sigma1, eps, k1, log_k2, support)
-      #   support[0] -= 0.01
-      #   support[1] += 0.01
-      #
-      # while True:
-      #   p1 = self.compute_integral(dim, sigma0, sigma1, eps, k1, log_k2, support)
-      #   if p1 < 0.698:
-      #     support[0] -= 0.01
-      #     support[1] += 0.01
-      #     p1 = self.compute_integral(dim, sigma0, sigma1, eps, k1, log_k2, support)
-      #     break
-      #   support[0] += 0.01
-      #   support[1] -= 0.01
-      #
-      # width_support = support[1] - support[0]
       print(
         (f"dim: {dim:3d}, mode: {center:.4f}, {mode:.4f}, "
          f"support: [{support[0]:.4f}, {support[1]:.4f}], {width_support:.3f}, "
@@ -298,29 +282,44 @@ class Certificate:
 
   def plot_3d_integrand(self):
 
-    fig = plt.figure(figsize=(32, 15))
+    fig = plt.figure(figsize=(10, 8))
+
+    eps = 0.25
+    sigma0 = 0.25
+    sigma1 = 0.30
     
     n_points = 200
     dpi = 100
     format = 'pdf'
     
     eps = 0.25
-    k1 = self.compute_k1_cohen(eps)
-    log_k = self.compute_log_k(sigma0)
+    k1 = self.compute_k1_cohen(eps, sigma0)
     log_k2 = -100000
     
-    x0 = np.linspace(  0, 10, n_points)
-    x1 = np.linspace(-10, 10, n_points)
+    x0 = np.linspace( 0, 10, n_points)
+    x1 = np.linspace(-3, 3, n_points)
     grid = np.meshgrid(x0, x1)
     X, Y = grid
     x = np.hstack((grid[0].flatten().reshape(-1, 1), grid[1].flatten().reshape(-1, 1)))
     
-    for i, dim in enumerate([20, 100, 120, 130, 150, 200, 300, 350]):
+    # ax = fig.add_subplot(1, 1, 1, projection='3d')
+    ax = fig.add_subplot(1, 1, 1)
+    
+    for i, dim in enumerate([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200]):
+      # x, dim, sigma0, sigma1, eps, k1, log_k2)
+      Z = self.integrand(x, dim, sigma0, sigma1, eps, k1, log_k2).reshape(n_points, n_points)
+      Z[Z < 1e-4] = float('nan')
+      Z = Z.reshape(n_points, n_points)
 
-      Z = self.f(x, eps, k1, log_k2, log_k).reshape(n_points, n_points)
-      ax = fig.add_subplot(2, 4, i+1, projection='3d')
-      surf = ax.plot_surface(X, Y, Z, rstride=1, cstride=1, cmap=cm.coolwarm, linewidth=0, antialiased=False)
-      ax.title.set_text('Dimension {}'.format(dim))
+      # surf = ax.plot_surface(X, Y, Z, 
+      #   rstride=1, cstride=1, cmap=cm.coolwarm, linewidth=1, antialiased=False)
+
+      # ax = fig.add_subplot(2, 4, i+1)
+      ax.contourf(X, Y, Z, levels=50)
+      # ax.title.set_text('Dimension {}'.format(dim))
+
+    
+    plt.tight_layout()
     plt.show()
     # fig.savefig('./integral_avec_log_k2_-5.{}'.format(format), dpi=dpi, format=format)
 
@@ -336,7 +335,8 @@ def main():
   p2 = 0.60
 
   cert = Certificate(sigma0, sigma1, p1, p2)
-  radius = cert.compute_cert(0.25)
+  # radius = cert.compute_cert(0.25)
+  cert.plot_3d_integrand()
   
   # print('cert {:.4f}'.format(radius))
 
